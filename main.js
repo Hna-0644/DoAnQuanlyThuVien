@@ -1,294 +1,222 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Thư Viện — Hệ thống quản lý</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;0,700;1,500&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="main.css"></head>
-<body>
+const STORAGE_KEY = 'thu-vien-manager-state-v2';
+let nextBookId = 1, nextMemberId = 1, nextLoanId = 1;
+let feePerDay = 5000; // VND per day overdue
+let currentTheme = 'light';
+let currentView = 'dashboard';
+const todayISO = () => new Date().toISOString().slice(0,10);
+const addDays = (iso, n) => { const d = new Date(iso); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+const fmtDate = (iso) => { const [y,m,d] = iso.split('-'); return `${d}/${m}/${y}`; };
+const fmtVND = (n) => n.toLocaleString('vi-VN') + ' đ';
 
-<div class="app">
-  <!-- ===== Sidebar ===== -->
-  <aside class="sidebar">
-    <div class="brand">
-      <div class="brand-mark">TV</div>
-      <div class="brand-text">
-        <p class="display">Thư Viện Sông Hương</p>
-        <small>Hệ thống quản lý</small>
-      </div>
-    </div>
+function makeBook(title, author, category, copies = 1, isbn = '', cover = ''){
+  const id = nextBookId++;
+  return {
+    id,
+    title,
+    author,
+    category: category || 'Chưa phân loại',
+    copies: Math.max(1, copies),
+    available: Math.max(1, copies),
+    isbn,
+    cover,
+  };
+}
 
-    <a class="nav-item active" data-view="dashboard"><span class="ic">◈</span> Tổng quan</a>
-    <a class="nav-item" data-view="books"><span class="ic">▤</span> Danh mục sách <span class="nav-count" id="navBookCount">0</span></a>
-    <a class="nav-item" data-view="loans"><span class="ic">⇄</span> Mượn / Trả <span class="nav-count" id="navLoanCount">0</span></a>
-    <a class="nav-item" data-view="members"><span class="ic">☺</span> Thành viên <span class="nav-count" id="navMemberCount">0</span></a>
+function saveState(){
+  try {
+    const payload = {
+      nextBookId, nextMemberId, nextLoanId,
+      feePerDay,
+      books,
+      members,
+      loans,
+      theme: currentTheme,
+      activeView: currentView,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.warn('Không lưu được trạng thái vào localStorage', err);
+  }
+}
 
-    <div class="sidebar-foot">
-      Dữ liệu lưu trong trình duyệt, vẫn giữ khi tải lại trang. Xóa cache sẽ đặt lại dữ liệu.
-    </div>
-  </aside>
-  <div class="sidebar-backdrop" onclick="toggleMobileMenu(false)"></div>
+function applyTheme(theme){
+  currentTheme = theme === 'dark' ? 'dark' : 'light';
+  document.body.classList.toggle('dark', currentTheme === 'dark');
+  const btn = document.getElementById('themeToggle');
+  if(btn){
+    btn.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+    btn.setAttribute('aria-label', currentTheme === 'dark' ? 'Chuyển sang chế độ sáng' : 'Chuyển sang chế độ tối');
+  }
+}
 
-  <!-- ===== Main ===== -->
-  <main class="main">
-    <div class="topbar-tools">
-      <button class="btn btn-ghost btn-sm mobile-menu-btn" onclick="toggleMobileMenu(true)" aria-label="Mở menu điều hướng" aria-expanded="false">☰</button>
-      <button class="btn btn-ghost btn-sm" id="themeToggle" onclick="toggleTheme()" aria-label="Chuyển đổi chế độ sáng/tối">🌙</button>
-    </div>
+function toggleTheme(){
+  applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
+  saveState();
+}
 
-    <!-- ---------- DASHBOARD VIEW ---------- -->
-    <section id="view-dashboard">
-      <div class="topline">
-        <div>
-          <h1 class="display">Tổng quan thư viện</h1>
-          <p>Tình trạng sách, lượt mượn và thành viên — cập nhật theo thời gian thực.</p>
-        </div>
-        <button class="btn btn-primary" onclick="openLoanModal()">+ Ghi lượt mượn mới</button>
-      </div>
+function toggleMobileMenu(open){
+  const app = document.querySelector('.app');
+  const btn = document.querySelector('.mobile-menu-btn');
+  app.classList.toggle('menu-open', open);
+  if(btn){ btn.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+}
 
-      <div class="stats">
-        <div class="stat-card">
-          <div class="num mono" id="statTotalBooks">0</div>
-          <div class="lbl">Đầu sách</div>
-        </div>
-        <div class="stat-card accent">
-          <div class="num mono" id="statAvailable">0</div>
-          <div class="lbl">Bản sẵn có</div>
-        </div>
-        <div class="stat-card">
-          <div class="num mono" id="statLowStock">0</div>
-          <div class="lbl">Sắp hết sách</div>
-        </div>
-        <div class="stat-card">
-          <div class="num mono" id="statBorrowing">0</div>
-          <div class="lbl">Đang được mượn</div>
-        </div>
-        <div class="stat-card alert">
-          <div class="num mono" id="statOverdue">0</div>
-          <div class="lbl">Quá hạn trả</div>
-        </div>
-        <div class="stat-card alert">
-          <div class="num mono" id="statFeeOutstanding">0 đ</div>
-          <div class="lbl">Phí trễ hạn chưa thu</div>
-        </div>
-      </div>
+function loadState(){
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(!raw) return false;
+    const data = JSON.parse(raw);
+    if(!data) return false;
+    nextBookId = data.nextBookId || 1;
+    nextMemberId = data.nextMemberId || 1;
+    nextLoanId = data.nextLoanId || 1;
+    feePerDay = typeof data.feePerDay === 'number' ? data.feePerDay : 5000;
+    books = Array.isArray(data.books) ? data.books.map(b => ({ ...b })) : [];
+    members = Array.isArray(data.members) ? data.members.map(m => ({ ...m })) : [];
+    loans = Array.isArray(data.loans) ? data.loans.map(l => ({ ...l })) : [];
+    currentTheme = data.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    currentView = data.activeView || 'dashboard';
+    applyTheme(currentTheme);
+    return true;
+  } catch (err) {
+    console.warn('Không thể đọc trạng thái từ localStorage', err);
+    return false;
+  }
+}
 
-      <div class="section-head"><h2>Lượt mượn cần chú ý</h2></div>
-      <div class="panel">
-        <table>
-          <thead>
-            <tr><th>Sách</th><th>Người mượn</th><th>Hạn trả</th><th>Trạng thái</th><th>Phí trễ hạn</th></tr>
-          </thead>
-          <tbody id="dashLoanRows"></tbody>
-        </table>
-        <div id="dashLoanEmpty" class="empty" style="display:none;">
-          <div class="glyph">⇄</div>
-          <p>Chưa có lượt mượn nào cần chú ý.</p>
-        </div>
-      </div>
-    </section>
+let books = [
+  makeBook("Số đỏ", "Vũ Trọng Phụng", "Văn học", 3, "978-604-1-12345-1", ""),
+  makeBook("Dế Mèn phiêu lưu ký", "Tô Hoài", "Văn học", 4, "978-604-1-22345-2", ""),
+  makeBook("Sapiens: Lược sử loài người", "Yuval Noah Harari", "Lịch sử", 2, "978-0-06-231609-7", ""),
+  makeBook("Đắc nhân tâm", "Dale Carnegie", "Kỹ năng sống", 5, "978-604-1-33345-3", ""),
+  makeBook("Nhà giả kim", "Paulo Coelho", "Văn học", 3, "978-0-06-231500-7", ""),
+  makeBook("Cấu trúc dữ liệu và giải thuật", "Nguyễn Đức Nghĩa", "Khoa học máy tính", 2, "978-604-1-44345-4", ""),
+  makeBook("Vũ trụ trong vỏ hạt dẻ", "Stephen Hawking", "Khoa học", 2, "978-0-553-80202-3", ""),
+  makeBook("Totto-chan bên cửa sổ", "Kuroyanagi Tetsuko", "Thiếu nhi", 3, "978-604-1-55345-5", ""),
+];
 
-    <!-- ---------- BOOKS VIEW ---------- -->
-    <section id="view-books" style="display:none;">
-      <div class="topline">
-        <div>
-          <h1 class="display">Danh mục sách</h1>
-          <p>Toàn bộ đầu sách trong thư viện.</p>
-        </div>
-        <div class="topline-actions">
-          <button class="btn btn-ghost" onclick="exportBooksCSV()">⬇ Xuất CSV</button>
-          <button class="btn btn-primary" onclick="openBookModal()">+ Thêm sách</button>
-        </div>
-      </div>
+let members = [
+  { id: nextMemberId++, name: "Trần Minh Anh", email: "minhanh.tran@vidu.com" },
+  { id: nextMemberId++, name: "Lê Quốc Bảo", email: "quocbao.le@vidu.com" },
+  { id: nextMemberId++, name: "Phạm Thu Hà", email: "thuha.pham@vidu.com" },
+];
 
-      <div class="drawer-bar">
-        <div class="search-wrap"><input id="bookSearch" type="text" placeholder="Tìm theo tên sách, tác giả hoặc ISBN…"></div>
-        <select id="bookCategoryFilter" class="filter"><option value="">Mọi thể loại</option></select>
-        <select id="bookStatusFilter" class="filter">
-          <option value="">Tất cả trạng thái</option>
-          <option value="available">Còn sách</option>
-          <option value="low">Sắp hết</option>
-          <option value="out">Hết sách</option>
-        </select>
-      </div>
+let loans = [];
+function addLoan(bookTitleMatch, memberIdx, borrowOffset, dueOffset){
+  const book = books.find(b => b.title === bookTitleMatch);
+  if(!book || book.available <= 0) return;
+  book.available -= 1;
+  loans.push({
+    id: nextLoanId++,
+    bookId: book.id,
+    memberId: members[memberIdx].id,
+    borrowDate: addDays(todayISO(), borrowOffset),
+    dueDate: addDays(todayISO(), dueOffset),
+    returnDate: null
+  });
+}
+addLoan("Sapiens: Lược sử loài người", 0, -20, -6);
+addLoan("Đắc nhân tâm", 1, -3, 11);
+addLoan("Cấu trúc dữ liệu và giải thuật", 2, -10, -1);
+(function(){
+  const book = books.find(b => b.title === "Nhà giả kim");
+  loans.push({ id: nextLoanId++, bookId: book.id, memberId: members[0].id,
+    borrowDate: addDays(todayISO(), -40), dueDate: addDays(todayISO(), -26), returnDate: addDays(todayISO(), -20) });
+})();
 
-      <div id="bookGrid" class="card-grid"></div>
-      <div id="bookEmpty" class="empty" style="display:none;">
-        <div class="glyph">▤</div>
-        <p>Không tìm thấy sách phù hợp.</p>
-      </div>
-    </section>
+const views = ["dashboard","books","loans","members"];
+function showView(name){
+  if(!views.includes(name)) name = 'dashboard';
+  currentView = name;
+  views.forEach(v => {
+    document.getElementById('view-'+v).style.display = (v===name) ? '' : 'none';
+  });
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.view === name);
+  });
+  toggleMobileMenu(false);
+  renderAll();
+}
 
-    <!-- ---------- LOANS VIEW ---------- -->
-    <section id="view-loans" style="display:none;">
-      <div class="topline">
-        <div>
-          <h1 class="display">Mượn / Trả sách</h1>
-          <p>Theo dõi toàn bộ lượt mượn, kể cả đã trả.</p>
-        </div>
-        <div class="topline-actions">
-          <button class="btn btn-ghost" onclick="exportLoansCSV()">⬇ Xuất CSV</button>
-          <button class="btn btn-primary" onclick="openLoanModal()">+ Ghi lượt mượn mới</button>
-        </div>
-      </div>
+const loanStatus = loan => loan.returnDate ? 'returned' : (loan.dueDate < todayISO() ? 'overdue' : 'borrowing');
+const bookById = id => books.find(b => b.id === id);
+const memberById = id => members.find(m => m.id === id);
+const daysLate = loan => Math.max(0, Math.round((new Date(loan.returnDate || todayISO()) - new Date(loan.dueDate)) / 86400000));
+const feeFor = loan => daysLate(loan) * feePerDay;
 
-      <div class="drawer-bar">
-        <select id="loanStatusFilter" class="filter">
-          <option value="">Tất cả trạng thái</option>
-          <option value="borrowing">Đang mượn</option>
-          <option value="overdue">Quá hạn</option>
-          <option value="returned">Đã trả</option>
-        </select>
-        <div class="fee-setting">
-          Phí trễ hạn / ngày
-          <input id="feePerDayInput" type="number" min="0" step="1000">
-          <span>đ</span>
-        </div>
-      </div>
+function renderDashboard(){
+  document.getElementById('statTotalBooks').textContent = books.reduce((s,b)=>s+b.copies,0);
+  document.getElementById('statAvailable').textContent = books.reduce((s,b)=>s+b.available,0);
+  document.getElementById('statLowStock').textContent = books.filter(b => b.available > 0 && b.available <= 1).length;
+  document.getElementById('statBorrowing').textContent = loans.filter(l => loanStatus(l)!=='returned').length;
+  document.getElementById('statOverdue').textContent = loans.filter(l => loanStatus(l)==='overdue').length;
+  const outstanding = loans.filter(l => loanStatus(l)==='overdue').reduce((s,l)=> s+feeFor(l), 0);
+  document.getElementById('statFeeOutstanding').textContent = fmtVND(outstanding);
 
-      <div class="panel">
-        <table>
-          <thead>
-            <tr><th>Sách</th><th>Người mượn</th><th>Ngày mượn</th><th>Hạn trả</th><th>Trạng thái</th><th>Phí trễ hạn</th><th></th></tr>
-          </thead>
-          <tbody id="loanRows"></tbody>
-        </table>
-        <div id="loanEmpty" class="empty" style="display:none;">
-          <div class="glyph">⇄</div>
-          <p>Chưa có lượt mượn nào khớp với bộ lọc.</p>
-        </div>
-      </div>
-    </section>
+  const active = loans.filter(l => loanStatus(l) !== 'returned').sort((a,b)=> a.dueDate.localeCompare(b.dueDate)).slice(0,6);
+  const rows = document.getElementById('dashLoanRows');
+  rows.innerHTML = '';
+  active.forEach(l => {
+    const book = bookById(l.bookId), member = memberById(l.memberId);
+    if(!book || !member) return;
+    const status = loanStatus(l);
+    const fee = feeFor(l);
+    rows.insertAdjacentHTML('beforeend', `
+      <tr>
+        <td>${escapeHTML(book.title)}</td>
+        <td class="who">${escapeHTML(member.name)}</td>
+        <td><span class="stamp ${status==='overdue'?'':'deep'}">${fmtDate(l.dueDate)}</span></td>
+        <td>${statusBadge(status)}</td>
+        <td>${fee > 0 ? `<span class="fee-amount">${fmtVND(fee)}</span>` : `<span class="fee-amount zero">—</span>`}</td>
+      </tr>
+    `);
+  });
+  document.getElementById('dashLoanEmpty').style.display = active.length ? 'none' : '';
+}
 
-    <!-- ---------- MEMBERS VIEW ---------- -->
-    <section id="view-members" style="display:none;">
-      <div class="topline">
-        <div>
-          <h1 class="display">Thành viên</h1>
-          <p>Bạn đọc đã đăng ký thẻ thư viện. Bấm vào thẻ để xem lịch sử mượn.</p>
-        </div>
-        <div class="topline-actions">
-          <button class="btn btn-ghost" onclick="exportMembersCSV()">⬇ Xuất CSV</button>
-          <button class="btn btn-primary" onclick="openMemberModal()">+ Thêm thành viên</button>
-        </div>
-      </div>
+function statusBadge(status){
+  if(status==='overdue') return `<span class="badge overdue">● Quá hạn</span>`;
+  if(status==='returned') return `<span class="badge returned">✓ Đã trả</span>`;
+  return `<span class="badge borrowing">● Đang mượn</span>`;
+}
 
-      <div id="memberGrid" class="member-grid"></div>
-      <div id="memberEmpty" class="empty" style="display:none;">
-        <div class="glyph">☺</div>
-        <p>Chưa có thành viên nào.</p>
-      </div>
-    </section>
+function populateCategoryFilter(){
+  const sel = document.getElementById('bookCategoryFilter');
+  const current = sel.value;
+  const cats = [...new Set(books.map(b=>b.category))].sort();
+  sel.innerHTML = '<option value="">Mọi thể loại</option>' + cats.map(c=>`<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+  sel.value = current;
+}
 
-  </main>
-</div>
+function bookCoverMarkup(b){
+  const initial = (b.title || '?').trim().charAt(0).toUpperCase();
+  if(b.cover){
+    return `<img class="cover" src="${escapeHTML(b.cover)}" alt="" loading="lazy"
+              onerror="this.outerHTML='<div class=&quot;cover-placeholder&quot;>${initial}</div>'">`;
+  }
+  return `<div class="cover-placeholder">${initial}</div>`;
+}
 
-<!-- ===== Modal: Add/Edit Book ===== -->
-<div class="overlay" id="bookOverlay">
-  <div class="modal">
-    <h2 id="bookModalTitle">Thêm sách mới</h2>
-    <p class="sub">Nhập thông tin đầu sách để thêm vào danh mục.</p>
-    <input type="hidden" id="bookEditId">
-    <div class="field"><label>Tên sách</label><input id="bookTitle" type="text" placeholder="Ví dụ: Số đỏ"></div>
-    <div class="field"><label>Tác giả</label><input id="bookAuthor" type="text" placeholder="Ví dụ: Vũ Trọng Phụng"></div>
-    <div class="field-row">
-      <div class="field"><label>Thể loại</label><input id="bookCategory" type="text" placeholder="Văn học"></div>
-      <div class="field"><label>Số bản</label><input id="bookCopies" type="number" min="1" value="1"></div>
-    </div>
-    <div class="field"><label>Mã ISBN</label><input id="bookIsbn" type="text" placeholder="978-3-16-148410-0"></div>
-    <div class="field">
-      <label>Ảnh bìa (đường dẫn URL — tùy chọn)</label>
-      <input id="bookCover" type="text" placeholder="https://...">
-      <div class="field-hint">Để trống nếu chưa có ảnh — hệ thống sẽ hiện chữ cái đầu của tên sách.</div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('bookOverlay')">Hủy</button>
-      <button class="btn btn-primary" onclick="saveBook()">Lưu sách</button>
-    </div>
-  </div>
-</div>
+function renderBooks(){
+  populateCategoryFilter();
+  const q = document.getElementById('bookSearch').value.trim().toLowerCase();
+  const cat = document.getElementById('bookCategoryFilter').value;
+  const status = document.getElementById('bookStatusFilter').value;
+  const grid = document.getElementById('bookGrid');
+  grid.innerHTML = '';
 
-<!-- ===== Modal: Add/Edit Member ===== -->
-<div class="overlay" id="memberOverlay">
-  <div class="modal">
-    <h2 id="memberModalTitle">Thêm thành viên</h2>
-    <p class="sub" id="memberModalSub">Tạo thẻ thư viện mới cho bạn đọc.</p>
-    <input type="hidden" id="memberEditId">
-    <div class="field"><label>Họ và tên</label><input id="memberName" type="text" placeholder="Nguyễn Văn A"></div>
-    <div class="field"><label>Email</label><input id="memberEmail" type="email" placeholder="ten@vidu.com"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('memberOverlay')">Hủy</button>
-      <button class="btn btn-primary" onclick="saveMember()">Lưu thành viên</button>
-    </div>
-  </div>
-</div>
+  const filtered = books.filter(b => {
+    const matchesQ = !q || b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q) || (b.isbn||'').toLowerCase().includes(q);
+    const matchesCat = !cat || b.category === cat;
+    const matchesStatus = !status ||
+      (status === 'available' && b.available > 1) ||
+      (status === 'low' && b.available > 0 && b.available <= 1) ||
+      (status === 'out' && b.available === 0);
+    return matchesQ && matchesCat && matchesStatus;
+  });
 
-<!-- ===== Modal: New Loan ===== -->
-<div class="overlay" id="loanOverlay">
-  <div class="modal">
-    <h2>Ghi lượt mượn mới</h2>
-    <p class="sub">Chọn sách và người mượn. Hạn trả mặc định 14 ngày.</p>
-    <div class="field">
-      <label>Sách (chỉ hiện sách còn bản sẵn có)</label>
-      <select id="loanBookSelect"></select>
-    </div>
-    <div class="field">
-      <label>Người mượn</label>
-      <select id="loanMemberSelect"></select>
-    </div>
-    <div class="field-row">
-      <div class="field"><label>Ngày mượn</label><input id="loanBorrowDate" type="date"></div>
-      <div class="field"><label>Hạn trả</label><input id="loanDueDate" type="date"></div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('loanOverlay')">Hủy</button>
-      <button class="btn btn-primary" onclick="saveLoan()">Ghi lượt mượn</button>
-    </div>
-  </div>
-</div>
-
-<!-- ===== Modal: Renew Loan ===== -->
-<div class="overlay" id="renewOverlay">
-  <div class="modal">
-    <h2>Gia hạn mượn sách</h2>
-    <p class="sub" id="renewSub">Cộng thêm số ngày vào hạn trả hiện tại.</p>
-    <input type="hidden" id="renewLoanId">
-    <div class="field"><label>Số ngày gia hạn</label><input id="renewDays" type="number" min="1" value="7"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('renewOverlay')">Hủy</button>
-      <button class="btn btn-primary" onclick="applyRenew()">Xác nhận gia hạn</button>
-    </div>
-  </div>
-</div>
-
-<!-- ===== Modal: Member Detail / History ===== -->
-<div class="overlay" id="memberDetailOverlay">
-  <div class="modal modal-wide">
-    <div class="detail-head">
-      <div class="avatar" id="detailAvatar">—</div>
-      <div>
-        <h2 id="detailName" style="margin:0;">—</h2>
-        <p class="sub" id="detailEmail" style="margin:2px 0 0;">—</p>
-      </div>
-    </div>
-    <div class="detail-list" id="detailList"></div>
-    <div id="detailEmptyHist" class="empty" style="display:none; padding:30px 10px;">
-      <div class="glyph">⇄</div>
-      <p>Thành viên này chưa từng mượn sách.</p>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('memberDetailOverlay')">Đóng</button>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script src="main.js"></script>
-
-
+  filtered.forEach(b => {
+    const pillClass = b.available === 0 ? 'none' : (b.available <= 1 ? 'low' : 'ok');
     grid.insertAdjacentHTML('beforeend', `
       <div class="book-card">
         <div class="card-top">
@@ -315,13 +243,11 @@
   document.getElementById('bookEmpty').style.display = filtered.length ? 'none' : '';
   document.getElementById('navBookCount').textContent = books.length;
 }
+
 document.getElementById('bookSearch').addEventListener('input', renderBooks);
 document.getElementById('bookCategoryFilter').addEventListener('change', renderBooks);
 document.getElementById('bookStatusFilter').addEventListener('change', renderBooks);
 
-/* ============================================================
-   RENDER: Loans
-   ============================================================ */
 function renderLoans(){
   const filter = document.getElementById('loanStatusFilter').value;
   const rows = document.getElementById('loanRows');
@@ -360,6 +286,7 @@ function renderLoans(){
   document.getElementById('loanEmpty').style.display = filtered.length ? 'none' : '';
   document.getElementById('navLoanCount').textContent = loans.filter(l=>loanStatus(l)!=='returned').length;
 }
+
 document.getElementById('loanStatusFilter').addEventListener('change', renderLoans);
 
 const feeInput = document.getElementById('feePerDayInput');
@@ -402,9 +329,6 @@ function applyRenew(){
   renderAll();
 }
 
-/* ============================================================
-   RENDER: Members
-   ============================================================ */
 function renderMembers(){
   const grid = document.getElementById('memberGrid');
   grid.innerHTML = '';
@@ -462,9 +386,6 @@ function openMemberDetail(memberId){
   openModal('memberDetailOverlay');
 }
 
-/* ============================================================
-   MODALS
-   ============================================================ */
 function openModal(id){ document.getElementById(id).classList.add('show'); }
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
@@ -604,9 +525,6 @@ document.querySelectorAll('.overlay').forEach(ov => {
   ov.addEventListener('click', (e) => { if(e.target === ov) ov.classList.remove('show'); });
 });
 
-/* ============================================================
-   CSV EXPORT
-   ============================================================ */
 function csvEscape(val){
   const s = String(val ?? '');
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
@@ -614,7 +532,7 @@ function csvEscape(val){
 function toCSV(headers, rows){
   const lines = [headers.map(csvEscape).join(',')];
   rows.forEach(r => lines.push(r.map(csvEscape).join(',')));
-  return '\uFEFF' + lines.join('\r\n'); // BOM so Excel reads Vietnamese diacritics correctly
+  return '\uFEFF' + lines.join('\r\n');
 }
 function downloadCSV(filename, csvString){
   const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
@@ -652,11 +570,8 @@ function exportMembersCSV(){
   showToast('Đã xuất danh sách thành viên ra CSV.');
 }
 
-/* ============================================================
-   UTIL
-   ============================================================ */
 function escapeHTML(str){
-  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]));
 }
 let toastTimer;
 function showToast(msg){
@@ -688,6 +603,3 @@ function initApp(){
 }
 
 initApp();
-</script>
-</body>
-</html>
